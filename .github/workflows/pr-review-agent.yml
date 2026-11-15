@@ -942,10 +942,18 @@ jobs:
             // the previous inline comments open. Record the Maira threads that
             // exist before this run posts, then resolve them once the new
             // summary is published.
+            const legacyMarkers = ['<!-- maira-code-review -->', '<!-- claude-code-review -->'];
             const isMairaComment = (text) => typeof text === 'string'
               && (text.includes(inlineMarker)
                 || text.includes(`${brand} · confidence`)
-                || /_confidence \d+%_/.test(text));
+                || /_confidence \d+%_/.test(text)
+                || legacyMarkers.some((marker) => text.includes(marker)));
+            // Only the original finding comment carries an inline marker. A
+            // bot reply to a developer does not, so it must not be treated as
+            // superseded when the next review run cleans up old threads.
+            const isMairaFinding = (text) => typeof text === 'string'
+              && (text.includes(inlineMarker)
+                || legacyMarkers.some((marker) => text.includes(marker)));
             const listReviewThreads = async () => {
               const query = `query ($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
                 repository(owner: $owner, name: $repo) {
@@ -955,7 +963,7 @@ jobs:
                       nodes {
                         id
                         isResolved
-                        comments(first: 10) { nodes { body } }
+                        comments(first: 100) { nodes { body author { login } } }
                       }
                     }
                   }
@@ -979,10 +987,17 @@ jobs:
 
             let staleThreads = [];
             try {
-              staleThreads = (await listReviewThreads()).filter(
-                (thread) => !thread.isResolved
-                  && thread.comments.nodes.some((comment) => isMairaComment(comment.body)),
-              );
+              staleThreads = (await listReviewThreads()).filter((thread) => {
+                if (thread.isResolved) return false;
+                const comments = thread.comments.nodes;
+                if (!comments.some((comment) => isMairaComment(comment.body))) return false;
+                // An unanswered human reply, or a reply from Maira Lens itself,
+                // owns the thread: pr-review-reply.yml answers it and decides
+                // whether to resolve. Only the original finding comment is safe
+                // to supersede on a new review run.
+                const last = comments[comments.length - 1];
+                return isMairaFinding(last?.body);
+              });
             } catch (error) {
               core.warning(`Could not list previous review threads: ${error.message}`);
             }

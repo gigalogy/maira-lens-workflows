@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "reply"],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["addressed", "not_addressed", "needs_info"],
+      "description": "Whether the developer's change addresses the reported finding."
+    },
+    "reply": {
+      "type": "string",
+      "description": "Markdown reply to post in the review thread. At most 1500 characters, no heading, addressed to the developer."
+    }
+  }
+}
