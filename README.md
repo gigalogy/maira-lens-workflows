@@ -62,8 +62,9 @@ jobs:
 ```
 
 Pin `uses:` to a full commit SHA or an immutable release tag, never a branch.
-The caller chooses the branch filters and event types; the workflow itself only
-runs for `pull_request` events.
+The caller chooses the branch filters and event types; the review workflow only
+runs for `pull_request` events. Developer replies are handled by the separate
+reply workflow described below.
 
 The `MAIRA_LENS_*` names and the `app_id` input require a release after
 `v1.0.0`; the `v1.0.0` tag uses the older `MAIRA_CODE_*` names.
@@ -201,6 +202,64 @@ jobs:
 If `app_id` is omitted, the workflow uses `GITHUB_TOKEN` and the author stays
 `github-actions[bot]`. If `app_id` is set, `MAIRA_LENS_APP_PRIVATE_KEY` is
 required and the job fails early when it is missing.
+
+## Replying to developer responses
+
+The review workflow runs on PR events only, so it cannot see a developer reply
+posted on an inline thread. `pr-review-reply.yml` verifies that reply against
+the code at the PR head and posts a threaded answer:
+
+- `addressed` - confirms what changed and resolves the thread.
+- `not_addressed` - explains why the claim is wrong or incomplete and leaves the
+  thread open.
+- `needs_info` - asks for the evidence needed to verify the claim and leaves the
+  thread open.
+
+Add the event and job next to the review job:
+
+```yaml
+on:
+  pull_request:
+    branches: [develop]
+    types: [opened, reopened, synchronize, ready_for_review, review_requested]
+  pull_request_review_comment:
+    types: [created]
+
+concurrency:
+  # Keep review runs and reply runs from cancelling each other.
+  group: pr-review-${{ github.event.pull_request.number || github.run_id }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  review-reply:
+    if: >
+      github.event.comment.user.type != 'Bot' &&
+      github.event.comment.in_reply_to_id != null &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    uses: gigalogy/maira-lens-workflows/.github/workflows/pr-review-reply.yml@<full-sha-or-release-tag>
+    permissions:
+      contents: write        # the resolve job needs this
+      pull-requests: write   # post the reply
+    with:
+      effort: medium
+      max_budget_usd: "2"
+      app_id: ${{ vars.MAIRA_LENS_APP_ID }}
+    secrets:
+      MAIRA_LENS_TOKEN: ${{ secrets.MAIRA_LENS_TOKEN }}
+      MAIRA_LENS_APP_PRIVATE_KEY: ${{ secrets.MAIRA_LENS_APP_PRIVATE_KEY }}
+```
+
+Notes:
+
+- The reply workflow answers only threads opened by Maira Lens, including the
+  legacy `<!-- maira-code-review -->` marker, and never replies to bots.
+- It skips a comment that a later bot reply already answered, so retries and
+  duplicate events do not post twice.
+- `pr-review-agent.yml` now resolves only threads whose last comment is the
+  original finding. A thread with an unanswered human reply is left to the
+  reply workflow, so a developer response is never silently closed.
+- The reply workflow uses the same `MAIRA_LENS_*` variables, secret, and
+  optional App as the reviewer.
 
 GitHub App names are globally unique, so another organization cannot create a
 second app literally named `Maira Lens`. Client organizations should create
@@ -384,6 +443,8 @@ tokens.
 | No review posted                                       | The PR is a draft, authored by a bot, or from a fork; the gate skipped it.                                             |
 | Comments show `github-actions[bot]`                    | No `app_id` was passed, so `GITHUB_TOKEN` was used. Add the app ID and private key to post as the app.                 |
 | `create-github-app-token` failed                       | The app is not installed on the repository, the app ID is wrong, or the private key does not match.                    |
+| Bot did not answer a developer reply                   | Add the `pull_request_review_comment` trigger and the `review-reply` job; the review workflow only runs on PR events.   |
+| Thread stays open after a developer reply              | Expected. The reply workflow answers it; a `not_addressed` or `needs_info` verdict keeps it open.                       |
 
 ## Versioning and releases
 
@@ -398,9 +459,12 @@ tokens.
 
 ```
 .github/workflows/pr-review-agent.yml
+.github/workflows/pr-review-reply.yml
 prompts/pr-review.md
 prompts/pr-review-verify.md
 prompts/pr-review.schema.json
+prompts/pr-review-reply.md
+prompts/pr-review-reply.schema.json
 scripts/replay_review.py
 ```
 
