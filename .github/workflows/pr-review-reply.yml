@@ -135,7 +135,7 @@ jobs:
           fi
 
       - name: Check out the PR head
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -162,7 +162,7 @@ jobs:
       # The reply prompt and schema are coupled to the extraction code and stay
       # in this repository at the called workflow's commit, never in the caller.
       - name: Check out the reply prompt and schema
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: ${{ steps.workflow_source.outputs.repository }}
           ref: ${{ steps.workflow_source.outputs.ref }}
@@ -175,7 +175,7 @@ jobs:
       # that already has a newer bot reply is skipped so re-runs cannot spam.
       - name: Capture the review thread
         id: thread
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -554,7 +554,7 @@ jobs:
       - name: Mint the reply app token
         id: app_token
         if: steps.thread.outputs.should_reply == 'true' && inputs.app_id != ''
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ inputs.app_id }}
           private-key: ${{ secrets.MAIRA_LENS_APP_PRIVATE_KEY }}
@@ -564,7 +564,7 @@ jobs:
       - name: Post the reply
         id: publish
         if: steps.thread.outputs.should_reply == 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           REVIEW_TOKEN: ${{ secrets.MAIRA_LENS_TOKEN }}
         with:
@@ -616,7 +616,7 @@ jobs:
       - name: Mint the review app token
         id: app_token
         if: inputs.app_id != ''
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ inputs.app_id }}
           private-key: ${{ secrets.MAIRA_LENS_APP_PRIVATE_KEY }}
@@ -624,7 +624,7 @@ jobs:
           repositories: ${{ github.event.repository.name }}
 
       - name: Resolve the addressed thread
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           THREAD_ID: ${{ needs.reply-agent.outputs.thread_id }}
         with:

@@ -193,7 +193,7 @@ jobs:
           fi
 
       - name: Check out the PR head
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -246,7 +246,7 @@ jobs:
 
       - name: Check out the repository-specific brief
         if: inputs.prompt_repository != ''
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: ${{ steps.prompt_source.outputs.brief_repository }}
           ref: ${{ steps.prompt_source.outputs.brief_ref }}
@@ -258,7 +258,7 @@ jobs:
       # the publish step, so they always come from this repository at the called
       # workflow's commit, never from the PR or the caller.
       - name: Check out the verification prompt and schema
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: ${{ steps.prompt_source.outputs.workflow_repository }}
           ref: ${{ steps.prompt_source.outputs.workflow_ref }}
@@ -412,13 +412,13 @@ jobs:
 
       - name: Set up Python
         if: inputs.install_dependencies && hashFiles(format('{0}/pyproject.toml', inputs.project_directory), format('{0}/requirements.txt', inputs.project_directory), format('{0}/setup.py', inputs.project_directory), format('{0}/uv.lock', inputs.project_directory), format('{0}/poetry.lock', inputs.project_directory)) != ''
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ inputs.python_version }}
 
       - name: Install uv
         if: inputs.install_dependencies && hashFiles(format('{0}/uv.lock', inputs.project_directory)) != ''
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           version: "0.13.5"
           enable-cache: true
@@ -810,7 +810,7 @@ jobs:
       - name: Mint the review app token
         id: app_token
         if: inputs.app_id != ''
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ inputs.app_id }}
           private-key: ${{ secrets.MAIRA_LENS_APP_PRIVATE_KEY }}
@@ -819,7 +819,7 @@ jobs:
 
       - name: Publish the review
         id: publish
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           # Repository variable. Shown by default; set to "false" to hide the
           # cost line in the review summary.
@@ -1134,7 +1134,7 @@ jobs:
       - name: Mint the review app token
         id: app_token
         if: inputs.app_id != ''
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ inputs.app_id }}
           private-key: ${{ secrets.MAIRA_LENS_APP_PRIVATE_KEY }}
@@ -1142,7 +1142,7 @@ jobs:
           repositories: ${{ github.event.repository.name }}
 
       - name: Resolve superseded Maira Lens threads
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           STALE_THREADS: ${{ needs.review-agent.outputs.stale_threads }}
         with:
