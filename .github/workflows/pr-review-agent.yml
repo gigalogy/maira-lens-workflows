@@ -57,6 +57,16 @@ on:
         required: false
         type: boolean
         default: true
+      review_action:
+        description: "Review decision to submit: comment (never block or approve), request_changes, or approve."
+        required: false
+        type: string
+        default: comment
+      blocking_severity:
+        description: "Lowest severity that blocks the pull request when review_action is request_changes or approve: critical, high, medium, or low."
+        required: false
+        type: string
+        default: high
       app_id:
         description: "Optional GitHub App ID used to author review feedback. Leave empty to post as github-actions[bot]."
         required: false
@@ -825,6 +835,8 @@ jobs:
           # cost line in the review summary.
           MAIRA_LENS_SHOW_COST: ${{ vars.MAIRA_LENS_SHOW_COST }}
           REVIEW_EFFORT: ${{ inputs.effort }}
+          REVIEW_ACTION: ${{ inputs.review_action }}
+          BLOCKING_SEVERITY: ${{ inputs.blocking_severity }}
         with:
           github-token: ${{ steps.app_token.outputs.token || secrets.GITHUB_TOKEN }}
           script: |
@@ -873,6 +885,30 @@ jobs:
               (severityOrder[a.severity] ?? 9) - (severityOrder[b.severity] ?? 9) ||
               String(a.path).localeCompare(String(b.path)) ||
               (a.line - b.line));
+
+            // Review decision policy. `comment` preserves the historical
+            // behaviour: the workflow never blocks or approves a pull request.
+            const decisionMarker = '<!-- maira-lens-review-decision -->';
+            const requestedAction = String(process.env.REVIEW_ACTION || 'comment').trim().toLowerCase();
+            const reviewAction = ['comment', 'request_changes', 'approve'].includes(requestedAction)
+              ? requestedAction : 'comment';
+            if (reviewAction !== requestedAction) {
+              core.warning(`Unknown review_action '${requestedAction}'; falling back to 'comment'.`);
+            }
+            const requestedThreshold = String(process.env.BLOCKING_SEVERITY || 'high').trim().toLowerCase();
+            const blockingSeverity = ['critical', 'high', 'medium', 'low'].includes(requestedThreshold)
+              ? requestedThreshold : 'high';
+            if (blockingSeverity !== requestedThreshold) {
+              core.warning(`Unknown blocking_severity '${requestedThreshold}'; falling back to 'high'.`);
+            }
+            const blockingFindings = findings.filter(
+              (finding) => (severityOrder[finding.severity] ?? 9) <= severityOrder[blockingSeverity],
+            );
+            const reviewDecision = reviewAction === 'comment'
+              ? 'comment'
+              : blockingFindings.length > 0
+                ? 'request_changes'
+                : reviewAction === 'approve' ? 'approve' : 'comment';
 
             // Flatten newlines so a title cannot break out of a list item, but
             // keep inline markdown (`code`, **bold**) intact for readability.
@@ -1002,28 +1038,136 @@ jobs:
               core.warning(`Could not list previous review threads: ${error.message}`);
             }
 
-            let inlinePosted = 0;
-            if (inlineFindings.length > 0) {
+            // Submit one review so the decision (approve or request changes)
+            // and the inline comments land together. Inline comments are only
+            // valid on added lines, so a rejected batch is retried without
+            // them: the decision matters more than inline placement, and the
+            // findings are still detailed in the summary.
+            const reviewComments = inlineFindings.map((finding) => ({
+              path: finding.path,
+              line: finding.line,
+              side: 'RIGHT',
+              body: clean(formatFinding(finding), 6000),
+            }));
+            const reviewEvent = reviewDecision === 'request_changes' ? 'REQUEST_CHANGES'
+              : reviewDecision === 'approve' ? 'APPROVE' : 'COMMENT';
+            const decisionBody = (event) => {
+              if (event === 'REQUEST_CHANGES') {
+                return `${decisionMarker}\n${brand} requested changes: ${blockingFindings.length} finding(s) at or above **${blockingSeverity}**. The summary comment lists the full review.`;
+              }
+              if (event === 'APPROVE') {
+                const lower = findings.length - blockingFindings.length;
+                return `${decisionMarker}\n${brand} approved this pull request: no findings at or above **${blockingSeverity}**.`
+                  + (lower > 0 ? ` ${lower} lower-severity finding(s) are noted in the review.` : '')
+                  + ' The summary comment lists the full review.';
+              }
+              return `${brand} posted ${inlineFindings.length} inline finding(s). The summary comment lists the full review.`;
+            };
+
+            // A change-request-only policy never approves, so the previous
+            // change request has to be dismissed once nothing blocks anymore.
+            // In approve mode the new APPROVE review supersedes it, and a
+            // post-approval dismissal covers clients that keep the old review
+            // blocking until it is dismissed explicitly.
+            let dismissedChangeRequests = 0;
+            const dismissStaleChangeRequests = async () => {
+              let dismissed = 0;
               try {
-                await github.rest.pulls.createReview({
+                const reviews = await github.paginate(github.rest.pulls.listReviews, {
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   pull_number: context.payload.pull_request.number,
-                  commit_id: headSha,
-                  event: 'COMMENT',
-                  body: `${brand} posted ${inlineFindings.length} inline finding(s). The summary comment lists the full review.`,
-                  comments: inlineFindings.map((finding) => ({
-                    path: finding.path,
-                    line: finding.line,
-                    side: 'RIGHT',
-                    body: clean(formatFinding(finding), 6000),
-                  })),
+                  per_page: 100,
                 });
-                inlinePosted = inlineFindings.length;
+                const stale = reviews.filter(
+                  (review) => review.state === 'CHANGES_REQUESTED'
+                    && typeof review.body === 'string'
+                    && review.body.includes(decisionMarker),
+                );
+                for (const review of stale) {
+                  try {
+                    await github.rest.pulls.dismissReview({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      pull_number: context.payload.pull_request.number,
+                      review_id: review.id,
+                      message: `${brand}: no findings at or above ${blockingSeverity} remain.`,
+                    });
+                    dismissed += 1;
+                  } catch (error) {
+                    core.warning(`Could not dismiss previous change request ${review.id}: ${error.message}`);
+                  }
+                }
               } catch (error) {
-                core.warning(`Inline review failed, folding findings into the summary: ${error.message}`);
-                overflow.push(...inlineFindings);
+                core.warning(`Could not list previous reviews: ${error.message}`);
               }
+              return dismissed;
+            };
+
+            if (reviewAction === 'request_changes' && blockingFindings.length === 0) {
+              dismissedChangeRequests = await dismissStaleChangeRequests();
+            }
+
+            let inlinePosted = 0;
+            let decisionSubmitted = false;
+            // A COMMENT review is only a vehicle for inline comments; the
+            // summary lives in the single summary comment. Omitting its body
+            // stops every run from adding another summary-looking entry to the
+            // conversation.
+            const submitReview = (event, includeComments) => github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              commit_id: headSha,
+              event,
+              ...(event === 'COMMENT' ? {} : { body: decisionBody(event) }),
+              ...(includeComments && reviewComments.length > 0 ? { comments: reviewComments } : {}),
+            });
+
+            if (reviewDecision !== 'comment' || inlineFindings.length > 0) {
+              try {
+                await submitReview(reviewEvent, true);
+                inlinePosted = inlineFindings.length;
+                decisionSubmitted = reviewDecision !== 'comment';
+              } catch (error) {
+                core.warning(`Review submission with inline comments failed: ${error.message}`);
+                let submitted = false;
+                // The event can be rejected (for example, when GITHUB_TOKEN is
+                // not allowed to approve) while inline comments are still
+                // allowed. Fall back to a plain comment review so the findings
+                // are not lost.
+                if (inlineFindings.length > 0 && reviewEvent !== 'COMMENT') {
+                  try {
+                    await submitReview('COMMENT', true);
+                    inlinePosted = inlineFindings.length;
+                    submitted = true;
+                  } catch (commentError) {
+                    core.warning(`Comment review fallback failed: ${commentError.message}`);
+                  }
+                }
+                // Conversely, the comments can be rejected while the decision
+                // event is allowed: retry the decision without them.
+                if (!submitted && reviewDecision !== 'comment') {
+                  try {
+                    await submitReview(reviewEvent, false);
+                    decisionSubmitted = true;
+                    submitted = true;
+                    overflow.push(...inlineFindings);
+                  } catch (retryError) {
+                    core.warning(`Could not submit the ${reviewDecision} decision: ${retryError.message}`);
+                  }
+                }
+                if (!submitted) {
+                  overflow.push(...inlineFindings);
+                }
+              }
+            }
+
+            // The approval is authoritative, but dismissing the previous
+            // change request explicitly keeps branch protection consistent
+            // even when the client does not supersede it automatically.
+            if (reviewDecision === 'approve' && decisionSubmitted) {
+              dismissedChangeRequests += await dismissStaleChangeRequests();
             }
 
             const counts = findings.reduce((acc, finding) => {
@@ -1073,9 +1217,19 @@ jobs:
               }
             }
 
+            if (reviewAction !== 'comment' && reviewDecision !== 'comment' && !decisionSubmitted) {
+              body += `\n_${brand} could not submit the ${reviewDecision === 'approve' ? 'approval' : 'change request'}; see the workflow log._\n`;
+            }
+
             const footerFacts = [
               `${brand} reviewed \`${headSha.slice(0, 7)}\` with \`${oneLine(model, 80)}\` at effort \`${oneLine(process.env.REVIEW_EFFORT || 'high', 20)}\``,
             ];
+            if (decisionSubmitted) {
+              footerFacts.push(`decision: ${reviewDecision === 'approve' ? 'approved' : 'changes requested'}`);
+            }
+            if (dismissedChangeRequests > 0) {
+              footerFacts.push('previous change request dismissed');
+            }
             if (showCost && totalCost > 0) {
               footerFacts.push(`cost $${totalCost.toFixed(2)}`);
             }
@@ -1094,13 +1248,34 @@ jobs:
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner, repo: context.repo.repo, issue_number, per_page: 100,
             });
-            const existing = comments.find(
-              (comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker)
-            );
-            if (existing) {
+            // Keep exactly one summary comment across re-runs, including
+            // summaries written before the Maira Lens rename. Update the oldest
+            // one so its position in the conversation stays stable, and delete
+            // any duplicates left by older versions or racing runs.
+            const summaryMarkers = [
+              marker,
+              '<!-- maira-code-review-summary -->',
+              '<!-- claude-code-review-summary -->',
+            ];
+            const existing = comments
+              .filter((comment) => comment.user?.type === 'Bot'
+                && summaryMarkers.some((summaryMarker) => comment.body?.includes(summaryMarker)))
+              .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+            if (existing.length > 0) {
+              const [keep, ...duplicates] = existing;
               await github.rest.issues.updateComment({
-                owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body,
+                owner: context.repo.owner, repo: context.repo.repo, comment_id: keep.id, body,
               });
+              for (const duplicate of duplicates) {
+                try {
+                  await github.rest.issues.deleteComment({
+                    owner: context.repo.owner, repo: context.repo.repo, comment_id: duplicate.id,
+                  });
+                  core.info(`Deleted duplicate ${brand} summary comment ${duplicate.id}.`);
+                } catch (error) {
+                  core.warning(`Could not delete duplicate summary comment ${duplicate.id}: ${error.message}`);
+                }
+              }
             } else {
               await github.rest.issues.createComment({
                 owner: context.repo.owner, repo: context.repo.repo, issue_number, body,
