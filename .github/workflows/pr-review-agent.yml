@@ -521,6 +521,70 @@ jobs:
         # Pinned deliberately. Bump only after checking the CLI flags used below.
         run: npm install --global @anthropic-ai/claude-code@2.1.236
 
+      # Bound the diff section without hiding anything. A single generated file
+      # (lockfile, snapshot, vendored bundle) must not crowd the hand-written
+      # changes out of the prompt or push the session past the model's context
+      # window, so oversized files are shown head-and-tail with an explicit
+      # marker. Every elided byte stays reviewable through the full diff kept at
+      # /tmp/review/pr.diff and through per-path `git diff`, both of which the
+      # agent is allowed to run.
+      - name: Prepare the diff excerpt
+        run: |
+          set -euo pipefail
+          python3 - "$(cat /tmp/review/base_sha)" "$(cat /tmp/review/head_sha)" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          base, head = sys.argv[1], sys.argv[2]
+          PER_FILE = 24_000
+          PER_FILE_HEAD = 16_000
+          PER_FILE_TAIL = 8_000
+          TOTAL = 200_000
+
+          data = Path("/tmp/review/pr.diff").read_bytes()
+          # Split on header lines only: content lines carry a diff prefix, so a
+          # patch quoted inside a fixture cannot be mistaken for a header.
+          chunks = [c for c in re.split(rb"(?m)^(?=diff --git )", data) if c]
+          out = []
+          elided = []
+          for chunk in chunks:
+              if len(chunk) <= PER_FILE:
+                  out.append(chunk)
+                  continue
+              match = re.match(rb"diff --git a/(.+?) b/", chunk)
+              path = match.group(1).decode("utf-8", "replace") if match else "unknown path"
+              dropped = len(chunk) - PER_FILE_HEAD - PER_FILE_TAIL
+              elided.append((path, len(chunk), dropped))
+              out.append(chunk[:PER_FILE_HEAD])
+              out.append(
+                  f"\n[... {dropped} of {len(chunk)} diff bytes elided from {path} ...]\n".encode()
+              )
+              out.append(chunk[-PER_FILE_TAIL:])
+          excerpt = b"".join(out)
+          note = ["**Diff excerpt.**"]
+          if elided:
+              note.append(
+                  f"{len(elided)} file(s) differ by more than 24 KB and are shown as their"
+                  " first 16 KB and last 8 KB; each gap is marked"
+                  " `[... N bytes elided from <path> ...]`."
+              )
+          if len(excerpt) > TOTAL:
+              excerpt = excerpt[:TOTAL] + b"\n[... diff excerpt truncated at 200 KB ...]\n"
+              note.append("The excerpt itself is capped at 200 KB.")
+          note += [
+              f"The complete diff ({len(data)} bytes) is `/tmp/review/pr.diff`.",
+              "Nothing is hidden: read any elided range on demand, for example",
+              "",
+              "    sed -n '1,500p' /tmp/review/pr.diff",
+              f"    git diff {base}...{head} -- <path>",
+              "",
+              "Stream large or generated files in slices rather than loading them whole.",
+          ]
+          Path("/tmp/review/diff-excerpt.md").write_bytes(excerpt)
+          Path("/tmp/review/diff-note.md").write_text("\n".join(note) + "\n", encoding="utf-8")
+          PY
+
       - name: Build the review prompt
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -550,13 +614,9 @@ jobs:
             printf '### Changed files\n\n```\n'
             cat /tmp/review/files.txt
             printf '```\n\n### Diff\n\n```diff\n'
-            if [ "$(wc -c < /tmp/review/pr.diff)" -gt 400000 ]; then
-              head -c 400000 /tmp/review/pr.diff
-              printf '\n```\n\n**The diff was truncated at 400 KB. Read the remaining files directly.**\n'
-            else
-              cat /tmp/review/pr.diff
-              printf '\n```\n'
-            fi
+            cat /tmp/review/diff-excerpt.md
+            printf '```\n\n'
+            cat /tmp/review/diff-note.md
           } > /tmp/review/prompt.md
 
       # Shared runner for both passes: keeps the prompt off argv (E2BIG), turns
@@ -654,9 +714,9 @@ jobs:
       - name: Review the PR (finding pass)
         run: |
           set -euo pipefail
-          # The wrapper feeds the prompt on stdin (the prompt can grow past
-          # 400 KB, well above the kernel's 128 KiB per-argument limit), retries
-          # transient gateway failures, and enforces CLAUDE_MAX_BUDGET_USD.
+          # The wrapper feeds the prompt on stdin (well above the kernel's
+          # 128 KiB per-argument limit), retries transient gateway failures, and
+          # enforces CLAUDE_MAX_BUDGET_USD.
           /tmp/review/run-claude.sh "Claude review CLI" \
             /tmp/review/prompt.md /tmp/review/finding-pass.raw.json \
             --model "$ANTHROPIC_MODEL" \

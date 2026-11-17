@@ -81,7 +81,9 @@ Framework-specific idioms count only when they cause a concrete defect.
 
 - The diff is included below, but read files in full with `Read`, `Grep`, and
   `Glob` before judging anything. The repository is checked out at the PR head.
-  If the diff was truncated, read the remaining files directly.
+  Where the excerpt elides bytes (marked `[... N bytes elided ...]`), read the
+  elided range on demand instead of assuming the gap is irrelevant, and read
+  large or generated files in slices rather than loading them whole.
 - Use `git log`, `git show`, and `git blame` when the intent behind existing
   code matters.
 - Use the commands the repository already defines. Infer them from the
