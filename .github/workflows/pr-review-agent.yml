@@ -135,37 +135,9 @@ jobs:
       contents: read
       issues: write
       pull-requests: write
-    env:
-      # Self-hosted gateway. Configure as repository variables/secrets:
-      #   MAIRA_LENS_BASE_URL  e.g. https://maira.example.com (no /v1 suffix:
-      #                        the CLI appends /v1/messages itself)
-      #   MAIRA_LENS_MODEL     e.g. g-maira-code
-      #   MAIRA_LENS_TOKEN     (secret) Maira Hub API key, sent as X-Api-Key
-      ANTHROPIC_BASE_URL: ${{ vars.MAIRA_LENS_BASE_URL }}
-      # The gateway authenticates with an X-Api-Key header, not a bearer
-      # token. The CLI insists on a non-empty bearer token anyway, so it gets
-      # a placeholder; the secret travels in the custom header.
-      ANTHROPIC_AUTH_TOKEN: maira
-      ANTHROPIC_CUSTOM_HEADERS: "X-Api-Key:${{ secrets.MAIRA_LENS_TOKEN }}"
-      ANTHROPIC_MODEL: ${{ vars.MAIRA_LENS_MODEL }}
-      # The gateway exposes one model. Point Claude Code's housekeeping calls at
-      # it too, otherwise they 404 looking for a Haiku-class model.
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: ${{ vars.MAIRA_LENS_MODEL }}
-      ANTHROPIC_SMALL_FAST_MODEL: ${{ vars.MAIRA_LENS_MODEL }}
-      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
-      DISABLE_TELEMETRY: "1"
-      DISABLE_ERROR_REPORTING: "1"
-      DISABLE_AUTOUPDATER: "1"
-      # Bounded retry for transient gateway failures (Cloudflare 524, 429, 5xx).
-      # The gateway's 524 body asks for a >=120s backoff; two attempts keep the
-      # worst case well inside the job timeout.
-      CLAUDE_RETRY_ATTEMPTS: "2"
-      CLAUDE_RETRY_DELAY_SECONDS: "120"
-      # Ceiling for one pass. The cap is shared across retry attempts, so a
-      # retried pass cannot spend twice the ceiling.
-      CLAUDE_MAX_BUDGET_USD: ${{ inputs.max_budget_usd }}
-      # Effort level for both passes, chosen by the caller.
-      EFFORT: ${{ inputs.effort }}
+    # The gateway credentials stay on the two Claude steps below. The install
+    # step runs package-manager lifecycle scripts from the PR head, so it must
+    # not inherit MAIRA_LENS_TOKEN.
 
     steps:
       # `${{ vars.X }}` and `${{ secrets.X }}` expand to the empty string when
@@ -715,6 +687,21 @@ jobs:
           bash -n /tmp/review/run-claude.sh
 
       - name: Review the PR (finding pass)
+        env:
+          ANTHROPIC_BASE_URL: ${{ vars.MAIRA_LENS_BASE_URL }}
+          ANTHROPIC_AUTH_TOKEN: maira
+          ANTHROPIC_CUSTOM_HEADERS: "X-Api-Key:${{ secrets.MAIRA_LENS_TOKEN }}"
+          ANTHROPIC_MODEL: ${{ vars.MAIRA_LENS_MODEL }}
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: ${{ vars.MAIRA_LENS_MODEL }}
+          ANTHROPIC_SMALL_FAST_MODEL: ${{ vars.MAIRA_LENS_MODEL }}
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+          DISABLE_TELEMETRY: "1"
+          DISABLE_ERROR_REPORTING: "1"
+          DISABLE_AUTOUPDATER: "1"
+          CLAUDE_RETRY_ATTEMPTS: "2"
+          CLAUDE_RETRY_DELAY_SECONDS: "120"
+          CLAUDE_MAX_BUDGET_USD: ${{ inputs.max_budget_usd }}
+          EFFORT: ${{ inputs.effort }}
         run: |
           set -euo pipefail
           # The wrapper feeds the prompt on stdin (well above the kernel's
@@ -777,6 +764,21 @@ jobs:
         run: python3 /tmp/review/extract.py /tmp/review/finding-pass.raw.json /tmp/review/findings.json
 
       - name: Refute weak findings (verification pass)
+        env:
+          ANTHROPIC_BASE_URL: ${{ vars.MAIRA_LENS_BASE_URL }}
+          ANTHROPIC_AUTH_TOKEN: maira
+          ANTHROPIC_CUSTOM_HEADERS: "X-Api-Key:${{ secrets.MAIRA_LENS_TOKEN }}"
+          ANTHROPIC_MODEL: ${{ vars.MAIRA_LENS_MODEL }}
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: ${{ vars.MAIRA_LENS_MODEL }}
+          ANTHROPIC_SMALL_FAST_MODEL: ${{ vars.MAIRA_LENS_MODEL }}
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+          DISABLE_TELEMETRY: "1"
+          DISABLE_ERROR_REPORTING: "1"
+          DISABLE_AUTOUPDATER: "1"
+          CLAUDE_RETRY_ATTEMPTS: "2"
+          CLAUDE_RETRY_DELAY_SECONDS: "120"
+          CLAUDE_MAX_BUDGET_USD: ${{ inputs.max_budget_usd }}
+          EFFORT: ${{ inputs.effort }}
         run: |
           set -euo pipefail
           count=$(python3 -c 'import json; print(len(json.load(open("/tmp/review/findings.json"))["findings"]))')
@@ -898,6 +900,9 @@ jobs:
           # cost line in the review summary.
           MAIRA_LENS_SHOW_COST: ${{ vars.MAIRA_LENS_SHOW_COST }}
           REVIEW_EFFORT: ${{ inputs.effort }}
+          # Used in the footer and to redact the key from published text.
+          ANTHROPIC_MODEL: ${{ vars.MAIRA_LENS_MODEL }}
+          ANTHROPIC_CUSTOM_HEADERS: "X-Api-Key:${{ secrets.MAIRA_LENS_TOKEN }}"
           REVIEW_ACTION: ${{ inputs.review_action }}
           BLOCKING_SEVERITY: ${{ inputs.blocking_severity }}
         with:

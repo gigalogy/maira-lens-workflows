@@ -351,6 +351,10 @@ def tool_env(python: str, cwd: Path) -> dict[str, str]:
     """Environment for the agent, with the resolved interpreter ahead of pyenv shims."""
     env = os.environ.copy()
     env.pop("PYENV_VERSION", None)
+    # The harness itself needs GH_TOKEN for gh/git, but the model subprocess
+    # never does: do not put the token in an environment its Bash tool can read.
+    env.pop("GH_TOKEN", None)
+    env.pop("GITHUB_TOKEN", None)
     if shutil.which("uv") is None:
         return env
     found = run_cmd(["uv", "python", "find", python], cwd=cwd, timeout=60, check=False)
@@ -1202,6 +1206,34 @@ def preflight(args: argparse.Namespace) -> None:
         sys.exit("gh CLI is not on PATH")
 
 
+def redact_outputs(out_dir: Path) -> None:
+    """Scrub the gateway key and GitHub token from everything the replay writes."""
+    secrets: list[str] = []
+    header = os.environ.get("ANTHROPIC_CUSTOM_HEADERS", "")
+    if ":" in header:
+        value = header.split(":", 1)[1].strip()
+        if value:
+            secrets.append(value)
+    for name in ("GH_TOKEN", "GITHUB_TOKEN"):
+        value = os.environ.get(name, "").strip()
+        if value:
+            secrets.append(value)
+    if not secrets:
+        return
+    for path in out_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        redacted = text
+        for secret in secrets:
+            redacted = redacted.replace(secret, "[redacted]")
+        if redacted != text:
+            path.write_text(redacted, encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     global PROMPT_DIR
     args = parse_args(argv or sys.argv[1:])
@@ -1227,11 +1259,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"replaying {len(prs)} PR(s) into {out_dir}")
 
     results = []
-    for index, pr in enumerate(prs, start=1):
-        print(f"[{index}/{len(prs)}] PR #{pr['number']} - {pr['title']}")
-        results.append(replay_pr(pr, args, out_dir, brief, schema_text, slug))
+    try:
+        for index, pr in enumerate(prs, start=1):
+            print(f"[{index}/{len(prs)}] PR #{pr['number']} - {pr['title']}")
+            results.append(replay_pr(pr, args, out_dir, brief, schema_text, slug))
 
-    write_report(out_dir, results, args, ground_truth)
+        write_report(out_dir, results, args, ground_truth)
+    finally:
+        redact_outputs(out_dir)
 
     failed = [item for item in results if item.get("error")]
     print(f"report: {out_dir / 'report.md'}")

@@ -41,6 +41,11 @@ If you cannot construct the failure path, drop the finding. Never report
 "consider", "might", "could be improved", naming, formatting, comment wording,
 missing docstrings, mechanical requests for tests, or hypothetical risks.
 
+Versioned GitHub Action and reusable-workflow refs are accepted maintainability
+choices, including a moving major tag such as `@v1` when the caller chooses it.
+Do not report the ref's mutability by itself; report a concrete secret,
+permission, or untrusted-code exposure that the ref enables.
+
 ## Suggested fixes
 
 A suggestion must be executable against code you can read.
