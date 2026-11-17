@@ -1104,7 +1104,12 @@ jobs:
               return dismissed;
             };
 
-            if (reviewAction === 'request_changes' && blockingFindings.length === 0) {
+            // When nothing blocks, clear the bot's previous change request
+            // before attempting the new decision. This must not depend on the
+            // decision being accepted: a rejected approval (for example,
+            // GITHUB_TOKEN cannot approve) would otherwise leave the old change
+            // request blocking the PR.
+            if (reviewAction !== 'comment' && blockingFindings.length === 0) {
               dismissedChangeRequests = await dismissStaleChangeRequests();
             }
 
@@ -1161,13 +1166,6 @@ jobs:
                   overflow.push(...inlineFindings);
                 }
               }
-            }
-
-            // The approval is authoritative, but dismissing the previous
-            // change request explicitly keeps branch protection consistent
-            // even when the client does not supersede it automatically.
-            if (reviewDecision === 'approve' && decisionSubmitted) {
-              dismissedChangeRequests += await dismissStaleChangeRequests();
             }
 
             const counts = findings.reduce((acc, finding) => {
