@@ -578,7 +578,10 @@ jobs:
               "",
               "    sed -n '1,500p' /tmp/review/pr.diff",
               f"    git diff {base}...{head} -- <path>",
+              f"    git show {base}:<path> | sed -n '1,200p'",
               "",
+              "Writes are not permitted, so compare against the base revision by",
+              "piping rather than redirecting to a file.",
               "Stream large or generated files in slices rather than loading them whole.",
           ]
           Path("/tmp/review/diff-excerpt.md").write_bytes(excerpt)

@@ -449,7 +449,10 @@ def build_diff_excerpt(diff: str, base: str, head: str, diff_path: str) -> tuple
         "",
         f"    sed -n '1,500p' {diff_path}",
         f"    git diff {base}...{head} -- <path>",
+        f"    git show {base}:<path> | sed -n '1,200p'",
         "",
+        "Writes are not permitted, so compare against the base revision by",
+        "piping rather than redirecting to a file.",
         "Stream large or generated files in slices rather than loading them whole.",
     ]
     return excerpt.decode("utf-8", "replace"), "\n".join(note) + "\n"
