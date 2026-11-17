@@ -85,23 +85,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    env:
-      ANTHROPIC_BASE_URL: ${{ vars.MAIRA_LENS_BASE_URL }}
-      # The gateway authenticates with an X-Api-Key header, not a bearer token.
-      ANTHROPIC_AUTH_TOKEN: maira
-      ANTHROPIC_CUSTOM_HEADERS: "X-Api-Key:${{ secrets.MAIRA_LENS_TOKEN }}"
-      ANTHROPIC_MODEL: ${{ vars.MAIRA_LENS_MODEL }}
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: ${{ vars.MAIRA_LENS_MODEL }}
-      ANTHROPIC_SMALL_FAST_MODEL: ${{ vars.MAIRA_LENS_MODEL }}
-      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
-      DISABLE_TELEMETRY: "1"
-      DISABLE_ERROR_REPORTING: "1"
-      DISABLE_AUTOUPDATER: "1"
-      CLAUDE_RETRY_ATTEMPTS: "2"
-      CLAUDE_RETRY_DELAY_SECONDS: "120"
-      CLAUDE_MAX_BUDGET_USD: ${{ inputs.max_budget_usd }}
-      EFFORT: ${{ inputs.effort }}
-
+    # The gateway credentials stay on the Claude step below.
     steps:
       - name: Validate reply configuration
         env:
@@ -522,6 +506,21 @@ jobs:
 
       - name: Verify the developer's claim
         if: steps.thread.outputs.should_reply == 'true'
+        env:
+          ANTHROPIC_BASE_URL: ${{ vars.MAIRA_LENS_BASE_URL }}
+          ANTHROPIC_AUTH_TOKEN: maira
+          ANTHROPIC_CUSTOM_HEADERS: "X-Api-Key:${{ secrets.MAIRA_LENS_TOKEN }}"
+          ANTHROPIC_MODEL: ${{ vars.MAIRA_LENS_MODEL }}
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: ${{ vars.MAIRA_LENS_MODEL }}
+          ANTHROPIC_SMALL_FAST_MODEL: ${{ vars.MAIRA_LENS_MODEL }}
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+          DISABLE_TELEMETRY: "1"
+          DISABLE_ERROR_REPORTING: "1"
+          DISABLE_AUTOUPDATER: "1"
+          CLAUDE_RETRY_ATTEMPTS: "2"
+          CLAUDE_RETRY_DELAY_SECONDS: "120"
+          CLAUDE_MAX_BUDGET_USD: ${{ inputs.max_budget_usd }}
+          EFFORT: ${{ inputs.effort }}
         run: |
           set -euo pipefail
           /tmp/reply/run-claude.sh "Claude reply CLI" \
