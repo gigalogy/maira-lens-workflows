@@ -529,8 +529,14 @@ tokens.
    commit. A manual `workflow_dispatch` run with the tag name does the same.
 2. Protect the `v1` tag with a tag ruleset so only the release workflow (or a
    dedicated GitHub App) can move or delete it. Protect the default branch and
-   the immutable `v1.x.y` tags as well.
-3. Keep the release notes and the immutable `v1.x.y` tag as the audit/rollback
+   the immutable `v1.x.y` tags as well. The ruleset needs an
+   `OrganizationAdmin` bypass (or a dedicated GitHub App bypass), because
+   GitHub Actions cannot bypass a tag ruleset with `GITHUB_TOKEN`.
+3. Create the repository secret `MAIRA_LENS_TAG_TOKEN`: a token owned by an
+   organization admin with **Contents: write**. The workflow uses it for the
+   tag push and fails with a clear message when it is missing. A dedicated
+   GitHub App token can replace it if the app is a ruleset bypass actor.
+4. Keep the release notes and the immutable `v1.x.y` tag as the audit/rollback
    reference. To roll back, move `v1` back to the previous release commit.
 
 ## Layout

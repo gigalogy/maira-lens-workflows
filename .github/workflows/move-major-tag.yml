@@ -28,11 +28,21 @@ jobs:
       (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'v1.'))
     runs-on: ubuntu-24.04
     steps:
+      - name: Check the tag-push token
+        env:
+          TAG_TOKEN: ${{ secrets.MAIRA_LENS_TAG_TOKEN }}
+        run: |
+          if [ -z "$TAG_TOKEN" ]; then
+            echo "::error::Set MAIRA_LENS_TAG_TOKEN to a token owned by an organization admin; the v1 tag ruleset blocks GITHUB_TOKEN."
+            exit 1
+          fi
+
       - name: Check out the release
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
           ref: ${{ github.event.release.tag_name || inputs.tag }}
+          token: ${{ secrets.MAIRA_LENS_TAG_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Point v1 at this release
         env:
