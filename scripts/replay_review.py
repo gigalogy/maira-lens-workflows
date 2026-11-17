@@ -51,7 +51,13 @@ TARGET_ROOT = Path.cwd()
 TARGET_SLUG = ""
 TARGET_BRIEF = Path(".github/maira/pr-review.md")
 
-DIFF_CAP = 400_000
+# Diff excerpting. Kept in lockstep with the "Prepare the diff excerpt" step in
+# .github/workflows/pr-review-agent.yml: a single large generated file must not
+# crowd the rest of the diff out of the prompt, and no byte is dropped.
+DIFF_PER_FILE = 24_000
+DIFF_PER_FILE_HEAD = 16_000
+DIFF_PER_FILE_TAIL = 8_000
+DIFF_EXCERPT_CAP = 200_000
 FINDINGS_CAP = 100_000
 JUDGE_DIFF_CAP = 200_000
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -402,12 +408,67 @@ def with_repo_guidance(brief: str) -> str:
     )
 
 
-def build_prompt(brief: str, pr: dict[str, Any], files: str, diff: str, installer: str | None) -> str:
-    diff_text = diff
-    suffix = ""
-    if len(diff_text.encode("utf-8")) > DIFF_CAP:
-        diff_text = diff_text.encode("utf-8")[:DIFF_CAP].decode("utf-8", errors="ignore")
-        suffix = "\n**The diff was truncated at 400 KB. Read the remaining files directly.**\n"
+def build_diff_excerpt(diff: str, base: str, head: str, diff_path: str) -> tuple[str, str]:
+    """Return (excerpt, note) for the diff section of the review prompt.
+
+    Mirrors the CI step: files whose diff exceeds DIFF_PER_FILE keep their first
+    DIFF_PER_FILE_HEAD and last DIFF_PER_FILE_TAIL bytes with an explicit marker,
+    and the note tells the agent how to read the elided bytes on demand.
+    """
+    data = diff.encode("utf-8")
+    # Split on header lines only: content lines carry a diff prefix, so a patch
+    # quoted inside a fixture cannot be mistaken for a header.
+    chunks = [c for c in re.split(rb"(?m)^(?=diff --git )", data) if c]
+    out: list[bytes] = []
+    elided = 0
+    for chunk in chunks:
+        if len(chunk) <= DIFF_PER_FILE:
+            out.append(chunk)
+            continue
+        match = re.match(rb"diff --git a/(.+?) b/", chunk)
+        path = match.group(1).decode("utf-8", "replace") if match else "unknown path"
+        dropped = len(chunk) - DIFF_PER_FILE_HEAD - DIFF_PER_FILE_TAIL
+        elided += 1
+        out.append(chunk[:DIFF_PER_FILE_HEAD])
+        out.append(f"\n[... {dropped} of {len(chunk)} diff bytes elided from {path} ...]\n".encode())
+        out.append(chunk[-DIFF_PER_FILE_TAIL:])
+    excerpt = b"".join(out)
+    note = ["**Diff excerpt.**"]
+    if elided:
+        note.append(
+            f"{elided} file(s) differ by more than 24 KB and are shown as their"
+            " first 16 KB and last 8 KB; each gap is marked"
+            " `[... N bytes elided from <path> ...]`."
+        )
+    if len(excerpt) > DIFF_EXCERPT_CAP:
+        excerpt = excerpt[:DIFF_EXCERPT_CAP] + b"\n[... diff excerpt truncated at 200 KB ...]\n"
+        note.append("The excerpt itself is capped at 200 KB.")
+    note += [
+        f"The complete diff ({len(data)} bytes) is `{diff_path}`.",
+        "Nothing is hidden: read any elided range on demand, for example",
+        "",
+        f"    sed -n '1,500p' {diff_path}",
+        f"    git diff {base}...{head} -- <path>",
+        f"    git show {base}:<path> | sed -n '1,200p'",
+        "",
+        "Writes are not permitted, so compare against the base revision by",
+        "piping rather than redirecting to a file.",
+        "Stream large or generated files in slices rather than loading them whole.",
+    ]
+    return excerpt.decode("utf-8", "replace"), "\n".join(note) + "\n"
+
+
+def build_prompt(
+    brief: str,
+    pr: dict[str, Any],
+    files: str,
+    diff: str,
+    installer: str | None,
+    diff_path: str,
+) -> str:
+    excerpt, diff_note = build_diff_excerpt(
+        diff, pr["baseRefOid"], pr["headRefOid"], diff_path
+    )
     body = (pr.get("body") or "").strip()
     if len(body) > 20000:
         body = body[:20000]
@@ -427,8 +488,8 @@ def build_prompt(brief: str, pr: dict[str, Any], files: str, diff: str, installe
         "### Changed files\n\n"
         f"```\n{files.strip()}\n```\n\n"
         "### Diff\n\n"
-        f"```diff\n{diff_text}\n```\n"
-        f"{suffix}"
+        f"```diff\n{excerpt}\n```\n\n"
+        f"{diff_note}"
     )
 
 
@@ -720,7 +781,7 @@ def replay_pr(
         diff = git("diff", "--no-color", "--find-renames", "--unified=40", range_spec).stdout
         files = git("diff", "--no-color", "--name-status", range_spec).stdout
         installer = detect_installer(worktree / args.project_directory / "pyproject.toml")
-        prompt = build_prompt(brief, pr, files, diff, installer)
+        prompt = build_prompt(brief, pr, files, diff, installer, str(pr_dir / "diff.patch"))
         (pr_dir / "prompt.md").write_text(prompt, encoding="utf-8")
         (pr_dir / "diff.patch").write_text(diff, encoding="utf-8")
 

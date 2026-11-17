@@ -461,8 +461,12 @@ tokens.
 - Transient gateway failures (`429`, `5xx`, Cloudflare `524`) are retried once
   after 120 seconds.
 - Each job has a 40-minute timeout and publishes at most 10 findings.
-- Diffs larger than 400 KB are truncated in the prompt; the agent is told to
-  read the remaining files directly.
+- The diff stays complete but is excerpted to fit the model's context window: a
+  file whose diff exceeds 24 KB is shown as its first 16 KB and last 8 KB with
+  an explicit `[... N bytes elided from <path> ...]` marker, and the whole
+  excerpt is capped at 200 KB. The full diff is kept on disk
+  (`/tmp/review/pr.diff`), and the agent is told to read elided ranges on demand
+  in slices, so no changed line is dropped from review.
 
 ## Review behavior
 
