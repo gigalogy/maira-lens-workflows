@@ -26,9 +26,11 @@ troubleshooting.
    including checking that its suggested fix only uses APIs present in the
    checkout or described in the repository brief; only findings that survive
    are published.
-3. **Publishing** — posts inline comments on lines the diff added, and a
-   summary comment for everything else, including severity counts, cost, model,
-   and effort.
+3. **Publishing** — posts inline comments on lines the diff added, a summary
+   comment for everything else, and, when `review_action` is set, an approval
+   or a change request. The summary is a single comment per pull request:
+   later runs update it in place, and duplicate summaries from older versions
+   are removed.
 4. **Cleanup** — resolves this workflow's review threads from the previous run.
 
 ## Quick start
@@ -64,7 +66,9 @@ jobs:
 Pin `uses:` to a full commit SHA or an immutable release tag, never a branch.
 The caller chooses the branch filters and event types; the review workflow only
 runs for `pull_request` events. Developer replies are handled by the separate
-reply workflow described below.
+reply workflow described below. Keep the `concurrency` group shown above: it
+prevents two runs for the same PR from racing and posting duplicate summaries
+or reviews.
 
 The `MAIRA_LENS_*` names and the `app_id` input require a release after
 `v1.0.0`; the `v1.0.0` tag uses the older `MAIRA_CODE_*` names.
@@ -134,6 +138,8 @@ Notes:
 | `python_version`       | `"3.11"`                        | Python to install when a Python project is detected. Ignored otherwise.                                                |
 | `project_directory`    | `"."`                           | Directory containing the app and its manifest(s), relative to the repository root.                                     |
 | `install_dependencies` | `true`                          | Install the project environment before reviewing. Set `false` for unsupported stacks.                                  |
+| `review_action`        | `comment`                       | `comment`, `request_changes`, or `approve`. See [Review decisions](#review-decisions).                                 |
+| `blocking_severity`    | `high`                          | Lowest severity that blocks the PR or prevents approval: `critical`, `high`, `medium`, or `low`.                       |
 | `app_id`               | `""`                            | Optional GitHub App ID used to author review feedback. Leave empty to post as `github-actions[bot]`.                   |
 | `prompt_repository`    | `""`                            | Repository containing an additional, repository-specific review brief.                                                 |
 | `prompt_ref`           | `""`                            | Full 40-character commit SHA of `prompt_repository`. Required when `prompt_repository` is set. Use the PR's base SHA.  |
@@ -141,6 +147,45 @@ Notes:
 | `brief_mode`           | `append`                        | How the repository-specific brief combines with the default brief: `append` or `replace`.                              |
 | `verify_prompt_path`   | `prompts/pr-review-verify.md`   | Verification brief, relative to this repository. Not overridable.                                                      |
 | `schema_path`          | `prompts/pr-review.schema.json` | Output JSON schema, relative to this repository. Not overridable.                                                      |
+
+## Review decisions
+
+By default (`review_action: comment`) Maira Lens never blocks or approves a pull
+request; it posts inline comments and the summary only. Set `review_action` to
+let it submit a review decision:
+
+| `review_action` | Finding at or above `blocking_severity` | No such finding |
+|---|---|---|
+| `comment` | Comment only | Comment only |
+| `request_changes` | Submit `REQUEST_CHANGES` | Dismiss Maira Lens's previous change request |
+| `approve` | Submit `REQUEST_CHANGES` | Submit `APPROVE` |
+
+- `blocking_severity` defaults to `high`. Set it to `low` to block on any
+  finding, or to `critical` to block only on critical findings.
+- In `approve` mode, findings below the threshold are still posted as inline
+  comments and the approval body notes how many there are. To approve only a
+  finding-free PR, set `blocking_severity: low`.
+- In `request_changes` mode Maira Lens dismisses its own previous change
+  request once no blocking findings remain. It never approves; use `approve`
+  if you want the bot to clear the block with an approval instead.
+- If the decision cannot be submitted (for example, the bot is the PR author,
+  or Actions approvals are disabled), the workflow logs a warning, still posts
+  the inline comments and summary, and notes the failure in the summary.
+- An approval is submitted as soon as the review completes, independent of
+  other checks. Use required status checks if approval should wait for CI.
+
+```yaml
+with:
+  review_action: approve
+  blocking_severity: high
+```
+
+**Permissions.** Reviews are submitted with the same author identity as
+comments. With `GITHUB_TOKEN` (`github-actions[bot]`), approving requires the
+repository or organization setting **Allow GitHub Actions to create and approve
+pull requests**; requesting changes works without it. Using the Maira Lens
+GitHub App avoids that limitation. Branch protection may still require human
+approvals even after Maira Lens approves.
 
 ## Secrets
 
