@@ -51,7 +51,7 @@ concurrency:
 
 jobs:
   review:
-    uses: gigalogy/maira-lens-workflows/.github/workflows/pr-review-agent.yml@<full-sha-or-release-tag>
+    uses: gigalogy/maira-lens-workflows/.github/workflows/pr-review-agent.yml@v1
     permissions:
       contents: write        # the resolve job needs this; the caller is the ceiling
       issues: write
@@ -63,7 +63,13 @@ jobs:
       MAIRA_LENS_TOKEN: ${{ secrets.MAIRA_LENS_TOKEN }}
 ```
 
-Pin `uses:` to a full commit SHA or an immutable release tag, never a branch.
+`@v1` is a moving major tag: it points at the latest stable `v1.x.y` release,
+so minor and patch releases reach every caller without a workflow change.
+Protect the `v1` tag with a tag ruleset so only the release workflow can move
+it; release tags (`v1.1.9`, ...) remain immutable for audit and rollback. Pin a
+full commit SHA or a release tag instead when a caller requires an immutable
+reference, and use Renovate or Dependabot to automate those updates.
+
 The caller chooses the branch filters and event types; the review workflow only
 runs for `pull_request` events. Developer replies are handled by the separate
 reply workflow described below. Keep the `concurrency` group shown above: it
@@ -72,6 +78,27 @@ or reviews.
 
 The `MAIRA_LENS_*` names and the `app_id` input require a release after
 `v1.0.0`; the `v1.0.0` tag uses the older `MAIRA_CODE_*` names.
+
+## Versioning
+
+The workflow is referenced through the moving `v1` major tag:
+
+```yaml
+uses: gigalogy/maira-lens-workflows/.github/workflows/pr-review-agent.yml@v1
+```
+
+Every stable `v1.x.y` release moves `v1` to that release commit. Callers on
+`@v1` pick up minor and patch fixes on their next run; a major release (`v2`)
+is a deliberate switch to a new tag. Release tags (`v1.1.9`, ...) remain
+immutable and are the audit/rollback reference.
+
+The `v1` tag is mutable by design, like `actions/checkout@v4`. Protect it with
+a tag ruleset so only the release workflow can move or delete it, and gate the
+release workflow itself through CI and, if desired, an environment approval. A
+bad release propagates to every `@v1` caller, so the release process is the
+control point. Repositories that require immutable references should pin a
+full commit SHA or a `v1.x.y` tag and use Renovate or Dependabot to propose
+updates; those updates are pull requests by nature.
 
 ## Requirements
 
@@ -231,7 +258,7 @@ The **author identity** on comments is controlled by the token that posts them:
 ```yaml
 jobs:
   review:
-    uses: gigalogy/maira-lens-workflows/.github/workflows/pr-review-agent.yml@<full-sha-or-release-tag>
+    uses: gigalogy/maira-lens-workflows/.github/workflows/pr-review-agent.yml@v1
     permissions:
       contents: write
       issues: write
@@ -281,7 +308,7 @@ jobs:
       github.event.comment.user.type != 'Bot' &&
       github.event.comment.in_reply_to_id != null &&
       github.event.pull_request.head.repo.full_name == github.repository
-    uses: gigalogy/maira-lens-workflows/.github/workflows/pr-review-reply.yml@<full-sha-or-release-tag>
+    uses: gigalogy/maira-lens-workflows/.github/workflows/pr-review-reply.yml@v1
     permissions:
       contents: write        # the resolve job needs this
       pull-requests: write   # post the reply
@@ -349,7 +376,7 @@ Then call the workflow with the brief pinned to the PR's **base** SHA:
 ```yaml
 jobs:
   review:
-    uses: gigalogy/maira-lens-workflows/.github/workflows/pr-review-agent.yml@<full-sha>
+    uses: gigalogy/maira-lens-workflows/.github/workflows/pr-review-agent.yml@v1
     permissions:
       contents: write
       issues: write
@@ -495,20 +522,23 @@ tokens.
 | Bot did not answer a developer reply                   | Add the `pull_request_review_comment` trigger and the `review-reply` job; the review workflow only runs on PR events.   |
 | Thread stays open after a developer reply              | Expected. The reply workflow answers it; a `not_addressed` or `needs_info` verdict keeps it open.                       |
 
-## Versioning and releases
+## Releasing
 
-- Consumers should pin `uses:` to a full commit SHA from a release page.
-- Tags in the workflow repository are the upgrade boundary. Protect release
-  tags and `master` so a tag cannot be moved to unreviewed code: every caller
-  passes its gateway key into this workflow.
-- To upgrade, update the pinned SHA in the caller workflow; no other change is
-  required.
+1. Publish a stable `v1.x.y` release. Publishing triggers the
+   `Move the v1 major tag` workflow, which force-updates `v1` to the release
+   commit. A manual `workflow_dispatch` run with the tag name does the same.
+2. Protect the `v1` tag with a tag ruleset so only the release workflow (or a
+   dedicated GitHub App) can move or delete it. Protect the default branch and
+   the immutable `v1.x.y` tags as well.
+3. Keep the release notes and the immutable `v1.x.y` tag as the audit/rollback
+   reference. To roll back, move `v1` back to the previous release commit.
 
 ## Layout
 
 ```
 .github/workflows/pr-review-agent.yml
 .github/workflows/pr-review-reply.yml
+.github/workflows/move-major-tag.yml
 prompts/pr-review.md
 prompts/pr-review-verify.md
 prompts/pr-review.schema.json
